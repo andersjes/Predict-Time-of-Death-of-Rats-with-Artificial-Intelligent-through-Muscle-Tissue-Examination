@@ -1,0 +1,1228 @@
+---
+title: "PiB"
+author: "Anders Jespersen"
+date: "2024-04-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+Packages:
+```{r}
+library(tidyverse)
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(caret)
+library(umap)
+library(gbm)
+library(gridExtra)
+library(viridis)
+
+```
+
+Read data
+```{r}
+xlsx_path_muscle <- 'C:/Users/Anders Jespersen/OneDrive - Aarhus Universitet/Skrivebord/PiB/Raw_PMI_rat_muscle_pos_w info.xlsx'
+
+muscle_df <- read_excel(xlsx_path_muscle)
+
+
+```
+
+
+
+
+
+log (x+1)
+
+```{r}
+
+# Identify indices of the first occurrence of each unique Sample_ID
+unique_indices <- !duplicated(muscle_df$Sample_ID)
+
+# Keep only the rows corresponding to the unique indices
+muscle_df_unique <- muscle_df[unique_indices, ]
+
+
+muscle_df_org <- muscle_df_unique %>%
+  filter(!str_detect(Death_manner, "Pentobarbital"))
+
+#only keep my rat samples:
+muscle_df_org <- muscle_df_org[2:51, ]
+
+
+#remove columns
+muscle_df_org <- muscle_df_org[, -which(names(muscle_df) %in% c('Unique_ID','Batch',"Room_Temperature", 'Tissue_ID', 'Type', 'PMI_group', 'Sampling_order','Death_manner', 'Sample_ID'))]
+
+
+muscle_df_org <- mutate_all(muscle_df_org, as.character)
+
+# Flatten the dataset into one column
+one_column <- muscle_df_org %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "Value")
+
+# Now you have one column with all the data from the data sets
+
+
+# Convert the 'Value' column to numeric
+one_column$Value <- as.numeric(one_column$Value)
+
+
+# Perform log transformation with a shift of 1
+one_column$log_transformed <- log(one_column$Value + 1)
+
+
+
+```
+
+
+```{r}
+# Set up a 1x2 plotting layout
+par(mfrow = c(1, 2))
+
+hist(one_column$Value, 
+     xlim = c(0, 400000),
+     ylim = c(0, 200000),
+     col=rgb(1,0,0,0.5),
+     xlab ='',
+     ylab = '',
+     main='',
+     breaks = 5000,
+     axes = FALSE)
+
+
+# Add custom x-axis with power of 10 labels
+axis(1, 
+     at = seq(0, 400000, by = 200000), 
+     labels = c(expression(0), 
+     expression(2 %*% 10^5), 
+     expression(4 %*% 10^5)))
+
+# Add custom y-axis with power of 10 labels
+axis(2, 
+     at = seq(0, 200000, by = 100000), 
+     labels = c(expression(0), 
+     expression(1 %*% 10^5), 
+     expression(2 %*% 10^5)))
+
+# Plot the log-transformed data histogram
+hist(one_column$log_transformed, 
+     xlim = c(0, 20), 
+     col=rgb(0,0,1,0.5),
+     xlab ='',
+     ylab = '',
+     main='')
+
+
+```
+
+QQ representation
+
+```{r}
+qqnorm(one_column$Value, main = "Q-Q Plot")
+qqline(one_column$Value, col = "red")
+
+qqnorm(one_column$log_transformed, main = "Q-Q Plot")
+qqline(one_column$log_transformed, col = "red")
+
+
+```
+
+
+
+
+create UMAP of original vs. UMAP of log-transformed
+
+```{r}
+
+
+# Convert all columns to numeric
+muscle_df_org <- as.data.frame(lapply(muscle_df_org, as.numeric))
+
+# Extract the time_since_death_h column
+time_since_death <- muscle_df_org$Time_since_death_h
+
+# Remove the time_since_death_h column from the dataset
+data_for_umap_org <- muscle_df_org[, -which(names(muscle_df_org) == "Time_since_death_h")]
+
+# Perform UMAP dimensionality reduction
+umap_result_org <- umap(data_for_umap_org)
+
+# Combine UMAP results with time_since_death_h column
+umap_with_time_org <- cbind(umap_result_org$layout, time_since_death)
+
+# Convert to data frame
+umap_with_time_org <- as.data.frame(umap_with_time_org)
+
+# Plot UMAP1 vs UMAP2 with color according to time_since_death_h
+umap_org <- ggplot(umap_with_time_org, aes(x = V1, y = V2, color = time_since_death)) +
+  geom_point() +
+  scale_color_viridis_c(name = "", option = 'cividis') +
+  labs(x='',y='',title='')
+
+
+# Perform log transformation with a shift of 1 for all columns
+muscle_df_log <- muscle_df_org %>%
+  mutate_all(~log(. + 1))
+
+# Extract the time_since_death_h column
+time_since_death_log <- muscle_df_log$Time_since_death_h
+
+# Remove the time_since_death_h column from the dataset
+data_for_umap_log <- muscle_df_log[, -which(names(muscle_df_org) == "Time_since_death_h")]
+
+# Perform UMAP dimensionality reduction
+umap_result_log <- umap(data_for_umap_log)
+
+# Combine UMAP results with time_since_death_h column
+umap_with_time_log <- cbind(umap_result_log$layout, time_since_death_log)
+
+# Convert to data frame
+umap_with_time_log <- as.data.frame(umap_with_time_log)
+
+# Plot UMAP1 vs UMAP2 with color according to time_since_death_h
+umap_log <- ggplot(umap_with_time_log, aes(x = V1, y = V2, color = time_since_death_log)) +
+  geom_point() +
+  scale_color_viridis_c(name = '',option = 'cividis') +
+  labs(x='',y='',title='')
+
+# Arrange plots side by side
+grid.arrange(umap_org, umap_log, ncol = 2)
+
+```
+
+
+
+cor
+
+Get muscle file:
+```{r}
+
+#remove 'Pentobarbital'
+muscle_df_cor <- muscle_df %>%
+  filter(!str_detect(Death_manner, "Pentobarbital"))
+
+#remove columns
+muscle_df_cor <- muscle_df[, -which(names(muscle_df) %in% c('Unique_ID','Batch',"Room_Temperature", 'Tissue_ID', 'Type', 'PMI_group', 'Sampling_order','Death_manner', 'Time_since_death_h'))]
+
+
+
+#only keep my rat samples:
+muscle_df_cor <- muscle_df_cor[5:67, ]
+
+
+# Convert Sample_ID column into a factor
+muscle_df_cor$Sample_ID <- as.factor(muscle_df_cor$Sample_ID)
+
+# Convert factor levels to numeric values
+muscle_df_cor$Sample_ID <- as.numeric(muscle_df_cor$Sample_ID)
+
+
+```
+
+Only keeps replicate muscle
+```{r}
+# Count the occurrences of each Sample ID
+id_counts <- table(muscle_df_cor$Sample_ID)
+
+# Extract the IDs that appear more than once
+ids_to_keep <- names(id_counts[id_counts > 1])
+
+# Filter the original data frame to keep only rows corresponding to these IDs
+muscle_df_cor <- muscle_df_cor[muscle_df_cor$Sample_ID %in% ids_to_keep, ]
+
+
+```
+
+make log transformation:
+```{r}
+# Step 1: Convert data frame to numeric
+new_df_muscle <- as.data.frame(sapply(muscle_df_cor, as.numeric))
+
+# Identify columns to transform (excluding 'Sample_ID')
+cols_to_transform <- !names(new_df_muscle) %in% c("Sample_ID")
+
+# Apply log transformation to selected columns
+new_df_muscle[, cols_to_transform] <- log10(new_df_muscle[, cols_to_transform] + 1)
+
+# Now new_df contains the desired columns
+
+```
+
+
+Find cor muscle:
+```{r}
+
+# Initialize a list to store correlation coefficients for each column pair
+correlation_coefficients_muscle <- list()
+
+# Iterate over each column
+for (i in 2:ncol(new_df_muscle)) {  # Start from the second column
+  # Extracting x and y values from the column
+  x_values <- new_df_muscle[[i]][seq(1, nrow(new_df_muscle), by = 2)]
+  y_values <- new_df_muscle[[i]][seq(2, nrow(new_df_muscle), by = 2)]
+  
+  # Calculate correlation coefficient
+  correlation_coef <- cor(x_values, y_values)
+  
+  # Storing correlation coefficient in the list
+  correlation_coefficients_muscle[[i - 1]] <- correlation_coef
+}
+
+# Flatten the list of correlation coefficients
+correlation_coefficients_muscle <- unlist(correlation_coefficients_muscle)
+
+
+```
+
+only takes correlation coefficients of that are above or below 0.9:
+```{r}
+# Filter correlation coefficients above 0.9 or below -0.9
+filtered_coefficients_muscle <- subset(correlation_coefficients_muscle, correlation_coefficients_muscle > 0.9 | correlation_coefficients_muscle < -0.9)
+
+
+# Get the column names of the molecules in the log-transformed dataset
+molecule_names <- names(muscle_df_log)[-1]  # Exclude the first column (assuming it's not a molecule name)
+
+# Get the indices of the filtered correlation coefficients
+indices_filtered <- which(correlation_coefficients_muscle > 0.9 | correlation_coefficients_muscle < -0.9)
+
+# Get the molecule names corresponding to the filtered indices
+molecule_names_filtered <- molecule_names[indices_filtered]
+
+
+# Extract log-transformed time since death
+log_time_since_death <- log(muscle_df_org$time_since_death_h + 1)
+
+# Filter columns based on desired correlation coefficients
+filtered_molecule_columns <- muscle_df_log[, molecule_names_filtered]
+
+# Merge log-transformed time since death and filtered molecule columns
+muscle_df_cor_final <- cbind(time_since_death_log, filtered_molecule_columns)
+
+# Convert all columns to numeric
+muscle_df_cor_final <- as.data.frame(lapply(muscle_df_cor_final, as.numeric))
+
+
+
+```
+
+Create UMAP of cor
+
+```{r}
+# Extract the time_since_death_log column
+time_since_death_cor <- muscle_df_cor_final$time_since_death_log
+
+# Remove the time_since_death_h column from the dataset
+data_for_umap_cor <- muscle_df_cor_final[, -which(names(muscle_df_cor_final) == "time_since_death_log")]
+
+# Perform UMAP dimensionality reduction
+umap_result_cor <- umap(data_for_umap_cor)
+
+
+# Combine UMAP results with time_since_death_log column
+umap_with_time_cor <- cbind(umap_result_cor$layout, time_since_death_log)
+
+# Convert to data frame
+umap_with_time_cor <- as.data.frame(umap_with_time_cor)
+
+# Plot UMAP1 vs UMAP2 with color according to time_since_death_h
+umap_cor <- ggplot(umap_with_time_cor, aes(x = V1, y = V2, color = time_since_death_log)) +
+  geom_point() +
+  scale_color_viridis_c(name = '',option = 'cividis') +
+  labs(x='',y='',title='')
+
+
+print(umap_cor)
+
+```
+
+
+
+
+SNR
+
+
+If I use my muscle data set:
+```{r}
+
+#only keep my my QC samples:
+muscle_df_QC <- muscle_df[70:85, ]
+
+#remove columns
+muscle_df_QC <- muscle_df_QC[, -which(names(muscle_df_QC) %in% c('Unique_ID','Sample_ID','Batch',"Room_Temperature", 'Tissue_ID', 'Type', 'PMI_group', 'Sampling_order','Death_manner','Time_since_death_h'))]
+
+# Step 1: Convert data frame to numeric
+muscle_df_QC <- as.data.frame(sapply(muscle_df_QC, as.numeric))
+
+#Log transformation with base 10 and adding 1
+muscle_df_QC <- log10(muscle_df_QC + 1)
+
+
+```
+
+SNR of muscle dataset:
+```{r}
+
+# signal to noise
+
+
+# Step 1: Calculate mean for each column (mean signal)
+mean_signal_muscle <- muscle_df_QC %>%
+  summarise(across(everything(), mean))
+
+# Step 2: Calculate standard deviation for each column (noise)
+noise_muscle <- muscle_df_QC %>%
+  summarise(across(everything(), sd))
+
+# Step 3: Calculate mean/SD for each column (SNR)
+SNR_muscle <- mean_signal_muscle / noise_muscle
+
+
+```
+
+Make columns to rows muscle:
+```{r}
+
+# Convert row names to a column
+SNR_muscle$Molecule <- rownames(SNR_muscle)
+
+# Reset row names to be NULL
+rownames(SNR_muscle) <- NULL
+
+# Reshape the data frame to have SNR values in one column
+SNR_long_muscle <- pivot_longer(SNR_muscle, -Molecule, names_to = "Variable", values_to = "SNR")
+
+
+# Select only the "Molecule" and "SNR" columns
+SNR_long_muscle <- select(SNR_long_muscle, -Molecule)
+
+
+
+```
+
+
+SNR above 300, 100, 50 and below 30  muscle:
+```{r}
+
+# Filter for SNR > 300
+SNR_above_300_muscle <- filter(SNR_long_muscle, SNR > 300)
+molecule_names_300_muscle <- pull(SNR_above_300_muscle, Variable)
+
+# Filter for SNR > 100
+SNR_above_100_muscle <- filter(SNR_long_muscle, SNR > 100)
+molecule_names_100_muscle <- pull(SNR_above_100_muscle, Variable)
+
+# Filter for SNR > 50
+SNR_above_50_muscle <- filter(SNR_long_muscle, SNR > 50)
+molecule_names_50_muscle <- pull(SNR_above_50_muscle, Variable)
+
+
+# Filter for SNR < 30
+SNR_below_30_muscle <- filter(SNR_long_muscle, SNR < 30)
+molecule_names_below_30_muscle <- pull(SNR_below_30_muscle, Variable)
+
+
+
+```
+
+Create df that contains SNR < 30 without cor:
+```{r}
+
+# Function to create data frame for SNR below 30
+create_df_SNR_below_30 <- function(muscle_df_cor_final, molecule_names_below_30_muscle) {
+  # Filter for columns present in muscle_finaldf_cor
+  selected_molecule_names <- intersect(molecule_names_below_30_muscle, colnames(muscle_df_cor_final))
+  
+  # Create a new data frame with the time_since_death_log column
+  new_df <- data.frame(time_since_death_log = muscle_df_cor_final$time_since_death_log)
+  
+  # Add columns for the selected molecules
+  for (molecule_name in selected_molecule_names) {
+    new_df[[molecule_name]] <- muscle_df_cor_final[[molecule_name]]
+  }
+  
+  return(new_df)
+}
+
+# Create the data frame for SNR below 30
+SNR_below_30_df <- create_df_SNR_below_30(muscle_df_cor_final, molecule_names_below_30_muscle)
+
+length(SNR_below_30_df)
+
+# Perform UMAP dimensionality reduction
+umap_result <- umap(t(SNR_below_30_df[, -1]))
+
+# Combine UMAP results with time_since_death_log column
+umap_with_time <- cbind(umap_result$layout, time_since_death_log = SNR_below_30_df$time_since_death_log)
+
+# Convert to data frame
+umap_with_time <- as.data.frame(umap_with_time)
+
+# Plot UMAP1 vs UMAP2 with color according to time_since_death_log
+UMAP_below_30 <- ggplot(umap_with_time, aes(x = V1, y = V2, color = time_since_death_log)) +
+  geom_point() +
+  scale_color_viridis_c(name = '',option = 'cividis') +
+  labs(x='',y='',title='')
+
+
+
+print(UMAP_below_30)
+
+```
+
+
+
+
+Creates df that only contains the desired molecules for cor:
+```{r}
+# Function to create data frames for each SNR threshold
+create_df_for_threshold <- function(molecule_names, muscle_df_cor_final, SNR_data) {
+  # Filter for columns present in muscle_finaldf_cor
+  selected_molecule_names <- intersect(molecule_names, colnames(muscle_df_cor_final))
+  
+  # Create a new data frame with the time_since_death_log column
+  new_df <- data.frame(time_since_death_log = muscle_df_cor_final$time_since_death_log)
+  
+  # Add columns for the selected molecules
+  for (molecule_name in selected_molecule_names) {
+    new_df[[molecule_name]] <- muscle_df_cor_final[[molecule_name]]
+  }
+  
+  return(new_df)
+}
+
+# Create data frames for each SNR threshold
+df_list <- list(
+  SNR_300_muscle = create_df_for_threshold(molecule_names_300_muscle, muscle_df_cor_final, SNR_above_300_muscle),
+  SNR_100_muscle = create_df_for_threshold(molecule_names_100_muscle, muscle_df_cor_final, SNR_above_100_muscle),
+  SNR_50_muscle = create_df_for_threshold(molecule_names_50_muscle, muscle_df_cor_final, SNR_above_50_muscle))
+  
+
+
+
+# Accessing the data frames from df_list
+SNR_300_df <- df_list$SNR_300_muscle
+SNR_100_df <- df_list$SNR_100_muscle
+SNR_50_df <- df_list$SNR_50_muscle
+
+
+
+
+```
+
+UMAP for new SNR data sets:
+```{r}
+
+# Initialize a list to store UMAP results for each data frame
+umap_results_list <- list()
+
+# Loop through each data frame in df_list
+for (name in names(df_list)) {
+  # Extract the time_since_death_log column
+  time_since_death_SNR <- df_list[[name]]$time_since_death_log
+  
+  # Remove the time_since_death_log column from the dataset
+  data_for_umap_cor <- df_list[[name]][, -which(names(df_list[[name]]) == "time_since_death_log")]
+  
+  # Perform UMAP dimensionality reduction
+  umap_result_cor <- umap(data_for_umap_cor)
+  
+  # Combine UMAP results with time_since_death_log column
+  umap_with_time_cor <- cbind(umap_result_cor$layout, time_since_death_SNR)
+  
+  # Convert to data frame
+  umap_with_time_cor <- as.data.frame(umap_with_time_cor)
+  
+  # Store the result in the umap_results_list
+  umap_results_list[[name]] <- umap_with_time_cor
+}
+
+# Initialize a list to store the ggplot objects
+umap_plots_list <- list()
+
+# Loop through each data frame in umap_results_list and create UMAP plots
+for (name in names(umap_results_list)) {
+  plot <- ggplot(umap_results_list[[name]], aes(x = V1, y = V2, color = time_since_death_SNR)) +
+          geom_point() +
+           scale_color_viridis_c(name = '',option = 'cividis') +
+  labs(x='',y='',title='')
+  
+  # Store the plot in the list
+  umap_plots_list[[name]] <- plot
+}
+
+
+
+# Combine the plots using grid.arrange from gridExtra package
+combined_plot <- do.call(grid.arrange, c(umap_plots_list, ncol = 1))
+
+# Print the combined plot
+print(umap_plots_list)
+
+
+```
+
+
+
+
+LASSO
+
+
+response and predictor filter
+```{r}
+# For SNR_300_df
+response_SNR_300 <- SNR_300_df[, 1]
+predictors_SNR_300 <- SNR_300_df[, -1]
+
+# For SNR_100_df
+response_SNR_100 <- SNR_100_df[, 1]
+predictors_SNR_100 <- SNR_100_df[, -1]
+
+# For SNR_50_df
+response_SNR_50 <- SNR_50_df[, 1]
+predictors_SNR_50 <- SNR_50_df[, -1]
+
+
+# For muscle_df_cor_final
+response_muscle_cor_final <- muscle_df_cor_final[, 1]
+predictors_muscle_cor_final <- muscle_df_cor_final[, -1]
+
+# For muscle_df_log
+response_muscle_log <- muscle_df_log[, 1]
+predictors_muscle_log <- muscle_df_log[, -1]
+
+# for muscle_df_org
+response_muscle_org <- muscle_df_org[, 1]
+predictors_muscle_org <- muscle_df_org[, -1]
+
+
+
+
+```
+
+
+Test and training split 300 + cor
+
+
+
+```{r}
+
+# Function to repeat the process with different seeds
+repeat_with_seed <- function(seed_value) {
+  set.seed(seed_value)  # Set the seed
+  
+  # Define train control
+  train_control <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
+  
+  # List of dataset names
+  dataset_names <- c("SNR_300", "SNR_100", "SNR_50", "muscle_cor_final", 'muscle_log', "muscle_org")
+  
+  # Function to calculate RMSE
+  calculate_rmse <- function(predictions, actual) {
+    sqrt(mean((predictions - actual)^2))
+  }
+  
+  # Initialize empty vector to store RMSE values
+  rmse_values <- numeric(length(dataset_names))
+  
+  # Loop through each dataset
+  for (name in dataset_names) {
+    # Get response and predictors for the current dataset
+    response <- get(paste("response_", name, sep = ""))
+    predictors <- get(paste("predictors_", name, sep = ""))
+    
+    # Create train/test partitions
+    trainIndex <- createDataPartition(response, p = 0.8, list = FALSE)
+    trainData <- predictors[trainIndex, ]
+    trainLabels <- response[trainIndex]
+    testData <- predictors[-trainIndex, ]
+    testLabels <- response[-trainIndex]
+    
+    # Print test labels
+    cat("Test Labels for", name, ":", testLabels, "\n")
+    
+    # Print dimensions of train and test data
+    cat("Dimensions of trainData for", name, ":", dim(trainData), "\n")
+    cat("Dimensions of testData for", name, ":", dim(testData), "\n")
+    
+    # Train the model
+    lasso_model <- train(
+      x = trainData,
+      y = trainLabels,
+      method = "glmnet",
+      trControl = train_control,
+      tuneGrid = expand.grid(alpha = 1, lambda = seq(0, 0.2, length.out = 100)), 
+      preProcess = c("center", "scale")
+    )
+    
+    # Make predictions
+    predictions <- predict(lasso_model, newdata = testData)
+    
+    # Calculate RMSE
+    rmse_values[name] <- calculate_rmse(predictions, testLabels)
+    
+    # Print RMSE
+    cat("RMSE for", name, ":", rmse_values[name], "\n")
+  }
+  
+  # Return RMSE values
+  return(rmse_values)
+}
+
+# Set different seeds
+seeds <- c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+
+# Initialize a list to store RMSE values for each seed
+rmse_values_list <- list()
+
+# Repeat the process with different seeds
+for (seed in seeds) {
+  rmse_values_list[[paste("Seed", seed)]] <- repeat_with_seed(seed)
+}
+
+# Print RMSE values for each seed
+for (i in seq_along(rmse_values_list)) {
+  cat("RMSE values for Seed", seeds[i], ":", rmse_values_list[[i]], "\n")
+
+}
+
+
+
+
+
+```
+new code with lambda
+
+```{r}
+# Function to repeat the process with different seeds
+repeat_with_seed <- function(seed_value) {
+  set.seed(seed_value)  # Set the seed
+  
+  # Define train control
+  train_control <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
+  
+  # List of dataset names
+  dataset_names <- c("SNR_300", "SNR_100", "SNR_50", "muscle_cor_final", 'muscle_log', "muscle_org")
+  
+  # Function to calculate RMSE
+  calculate_rmse <- function(predictions, actual) {
+    sqrt(mean((predictions - actual)^2))
+  }
+  
+  # Initialize empty list to store RMSE and lambda values
+  results <- list()
+  
+  # Loop through each dataset
+  for (name in dataset_names) {
+    # Get response and predictors for the current dataset
+    response <- get(paste("response_", name, sep = ""))
+    predictors <- get(paste("predictors_", name, sep = ""))
+    
+    # Create train/test partitions
+    trainIndex <- createDataPartition(response, p = 0.8, list = FALSE)
+    trainData <- predictors[trainIndex, ]
+    trainLabels <- response[trainIndex]
+    testData <- predictors[-trainIndex, ]
+    testLabels <- response[-trainIndex]
+    
+    # Train the model
+    lasso_model <- train(
+      x = trainData,
+      y = trainLabels,
+      method = "glmnet",
+      trControl = train_control,
+      tuneGrid = expand.grid(alpha = 1, lambda = seq(0, 0.2, length.out = 100)), 
+      preProcess = c("center", "scale")
+    )
+    
+    # Make predictions
+    predictions <- predict(lasso_model, newdata = testData)
+    
+    # Calculate RMSE
+    rmse <- calculate_rmse(predictions, testLabels)
+    
+    # Extract lambda values
+    best_lambda <- lasso_model$bestTune$lambda
+    
+    # Store both RMSE and best lambda value
+    results[[name]] <- list("RMSE" = rmse, "Lambda" = best_lambda)
+  }
+  
+  # Return results
+  return(results)
+}
+
+# Set different seeds
+seeds <- c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+
+# Initialize a list to store results for each seed
+results_list <- list()
+
+# Repeat the process with different seeds
+for (seed in seeds) {
+  results_list[[paste("Seed", seed)]] <- repeat_with_seed(seed)
+}
+
+# Print RMSE and Lambda values for each seed
+for (i in seq_along(results_list)) {
+  seed <- seeds[i]
+  cat("RMSE and Lambda values for Seed", seed, ":\n")
+  for (name in names(results_list[[paste("Seed", seed)]])) {
+    rmse <- results_list[[paste("Seed", seed)]][[name]][["RMSE"]]
+    lambda <- results_list[[paste("Seed", seed)]][[name]][["Lambda"]]
+    cat("Dataset:", name, "| RMSE:", rmse, "| Best Lambda:", lambda, "\n")
+  }
+  cat("\n")
+}
+
+```
+
+
+
+Only Org data to find correct lambda value. This has higher lambda values compared with other models.
+```{r}
+
+# Function to repeat the process with different seeds for muscle_org dataset
+repeat_with_seed_muscle_org <- function(seed_value) {
+  set.seed(seed_value)  # Set the seed
+  
+  # Define train control
+  train_control <- trainControl(
+    method = "repeatedcv", 
+    number = 10, 
+    repeats = 3
+  )
+  
+  # Define the response and predictors for muscle_org dataset
+  response <- muscle_df_org[, 1]
+  predictors <- muscle_df_org[, -1]
+  
+  # Create train/test partitions
+  trainIndex <- createDataPartition(response, p = 0.8, list = FALSE)
+  trainData <- predictors[trainIndex, ]
+  trainLabels <- response[trainIndex]
+  testData <- predictors[-trainIndex, ]
+  testLabels <- response[-trainIndex]
+  
+  # Train the model
+  lasso_model <- train(
+    x = trainData,
+    y = trainLabels,
+    method = "glmnet",
+    trControl = train_control,
+    tuneGrid = expand.grid(alpha = 1, lambda = seq(0, 3, length.out = 1000)), 
+    preProcess = c("center", "scale")
+  )
+  
+  # Make predictions
+  predictions <- predict(lasso_model, newdata = testData)
+  
+  # Calculate RMSE
+  rmse <- sqrt(mean((predictions - testLabels)^2))
+  
+  # Extract lambda values
+  best_lambda <- lasso_model$bestTune$lambda
+  
+  # Return both RMSE and best lambda value
+  return(list("RMSE" = rmse, "Lambda" = best_lambda))
+}
+
+# Set different seeds
+seeds <- 1:10
+
+# Initialize a list to store results for each seed
+results_list <- list()
+
+# Repeat the process with different seeds for muscle_org
+for (seed in seeds) {
+  results_list[[paste("Seed", seed)]] <- repeat_with_seed_muscle_org(seed)
+}
+
+# Print RMSE and Lambda values for each seed
+for (i in seq_along(results_list)) {
+  seed <- seeds[i]
+  rmse <- results_list[[paste("Seed", seed)]][["RMSE"]]
+  lambda <- results_list[[paste("Seed", seed)]][["Lambda"]]
+  cat("Seed:", seed, "| RMSE:", rmse, "| Best Lambda:", lambda, "\n")
+}
+
+# Calculate and print the average RMSE across all seeds
+average_rmse <- mean(sapply(results_list, function(result) result$RMSE))
+cat("Average RMSE across all seeds:", average_rmse, "\n")
+
+
+
+
+```
+
+
+RMSEs 
+```{r}
+RMSE_1 <- c(0.1087875, 0.1008621, 0.06732128, 0.1666459, 0.128201, 6.155164)
+RMSE_2 <- c(0.1361082, 0.09587591, 0.07916154, 0.1536237, 0.1585392, 7.110186)
+RMSE_3 <- c(0.1058876, 0.1101362, 0.1432661, 0.1189764, 0.1981573, 7.402102)
+RMSE_4 <- c(0.1698151, 0.1444509, 0.1565637, 0.1091664, 0.1576464, 6.755046)
+RMSE_5 <- c(0.181325, 0.08530761, 0.1262037, 0.1528059, 0.09961523, 7.148743)
+RMSE_6 <- c(0.1173951, 0.07480524, 0.07669703, 0.1143253, 0.1545372, 7.522576)
+RMSE_7 <- c(0.1888938, 0.135456, 0.1029297, 0.1280186, 0.1849805, 5.86882)
+RMSE_8 <- c(0.134353, 0.1462935, 0.1541267, 0.06334485, 0.1978652, 4.938509)
+RMSE_9 <- c(0.09024305, 0.1286753, 0.06085778, 0.12433, 0.1051215, 6.863213)
+RMSE_10 <- c(0.1756323, 0.1144414, 0.1611566, 0.1180382, 0.1582695, 5.108141)
+
+
+
+# Create the dataframe as provided
+df <- data.frame(
+  org = log1p(c(RMSE_1[6], RMSE_2[6], RMSE_3[6], RMSE_4[6], RMSE_5[6], RMSE_6[6], RMSE_7[6], RMSE_8[6], RMSE_9[6], RMSE_10[6])), 
+  log = c(RMSE_1[5], RMSE_2[5], RMSE_3[5], RMSE_4[5], RMSE_5[5], RMSE_6[5], RMSE_7[5], RMSE_8[5], RMSE_9[5], RMSE_10[5]),
+  cor = c(RMSE_1[4], RMSE_2[4], RMSE_3[4], RMSE_4[4], RMSE_5[4], RMSE_6[4], RMSE_7[4], RMSE_8[4], RMSE_9[4], RMSE_10[4]),
+  SNR_50 = c(RMSE_1[3], RMSE_2[3], RMSE_3[3], RMSE_4[3], RMSE_5[3], RMSE_6[3], RMSE_7[3], RMSE_8[3], RMSE_9[3], RMSE_10[3]),
+  SNR_100 = c(RMSE_1[2], RMSE_2[2], RMSE_3[2], RMSE_4[2], RMSE_5[2], RMSE_6[2], RMSE_7[2], RMSE_8[2], RMSE_9[2], RMSE_10[2]),
+  SNR_300 = c(RMSE_1[1], RMSE_2[1], RMSE_3[1], RMSE_4[1], RMSE_5[1], RMSE_6[1], RMSE_7[1], RMSE_8[1], RMSE_9[1], RMSE_10[1]),
+  rf = c(0.10894422, 0.14855544, 0.10149684, 0.22732769, 0.19005442, 0.13400884, 0.20773660, 0.08524711, 0.09902070, 0.24370005),
+  opt = c(0.07458760, 0.05134764, 0.05391814, 0.09290469, 0.11722380, 0.04379366, 0.11990755,
+                    0.08316363, 0.07183145, 0.12004040)
+)
+
+
+
+# Print the updated dataframe
+print(df)
+
+# Calculate the mean RMSE for each column
+mean_rmse <- colMeans(df)
+
+print(mean_rmse)
+
+
+```
+
+wilcox.test
+```{r}
+# Get the column names to be compared
+columns_to_compare <- colnames(df)
+
+# Initialize an empty matrix to store p-values
+p_value_matrix <- matrix(NA, nrow = length(columns_to_compare), ncol = length(columns_to_compare),
+                         dimnames = list(columns_to_compare, columns_to_compare))
+
+# Loop through each pair of columns and perform the Wilcoxon signed-rank test
+for (i in 1:(length(columns_to_compare) - 1)) {
+  for (j in (i + 1):length(columns_to_compare)) {
+    column1 <- df[[i]]
+    column2 <- df[[j]]
+    test_result <- wilcox.test(column1, column2, paired = TRUE)
+    p_value_matrix[i, j] <- test_result$p.value
+    p_value_matrix[j, i] <- test_result$p.value  # Symmetric matrix
+  }
+}
+
+
+p_value_matrix_rounded <- round(p_value_matrix, 4)
+print(p_value_matrix_rounded)
+```
+
+
+
+```{r}
+
+set.seed(5)
+
+# Create train/test partitions
+trainIndex_50 <- createDataPartition(response_SNR_50, p = 0.8, list = FALSE)
+trainData_50 <- predictors_SNR_50[trainIndex_50, ]
+trainLabels_50 <- response_SNR_50[trainIndex_50]
+testData_50 <- predictors_SNR_50[-trainIndex_50, ]
+testLabels_50 <- response_SNR_50[-trainIndex_50]
+
+
+
+# Define train control
+train_control <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
+
+# Train the model
+lasso_model_50 <- train(
+  x = trainData_50,
+  y = trainLabels_50,
+  method = "glmnet",
+  trControl = train_control,
+  tuneGrid = expand.grid(alpha = 1, lambda = seq(0, 0.2, length.out = 100)), 
+  preProcess = c("center", "scale")
+)
+
+
+best_lambda <- lasso_model_50$bestTune$lambda
+
+# Extract coefficients
+lasso_coefs <- coef(lasso_model_50$finalModel, s = best_lambda)
+
+
+# Filter out coefficients not equal to zero
+informative_coef <- lasso_coef[lasso_coef != 0]
+
+
+# Extract coefficient magnitudes and corresponding feature names
+coefs <- data.frame(Feature = rownames(lasso_coefs), Coefficient = abs(lasso_coefs[, 1]))
+
+# You can adjust the format string as needed for the desired precision
+coefs$Formatted_Coefficient <- sprintf("%.10f", coefs$Coefficient)
+
+# Convert back to numeric if needed for sorting, but keep the formatted version for display
+coefs$Numeric_Coefficient <- as.numeric(coefs$Formatted_Coefficient)
+
+# Order the dataframe by the 'Numeric_Coefficient' column in decreasing order
+coefs <- coefs[order(coefs$Numeric_Coefficient, decreasing = TRUE), ]
+
+# Select top 20 features
+selected_features <- coefs$Feature[1:min(20, nrow(coefs))]
+
+# Subset the Lasso coefficients to only include the selected features
+lasso_coefs_subset <- lasso_coefs[selected_features, ]
+
+# Check for matching column names
+matching_cols <- intersect(colnames(trainData_50), selected_features)
+
+# Print matching column names
+print(matching_cols)
+
+
+
+```
+
+
+
+Opt model
+```{r}
+
+# Initialize storage for coefficients and RMSE values
+coefficients_list <- list()  # To store coefficients for each seed
+rmse_values <- numeric(10)   # To store RMSE for each seed
+
+# Loop through each seed
+for (seed in 1:10) {
+  # Set the seed for reproducibility
+  set.seed(seed)
+  
+  # Create train/test partitions using the current seed
+  trainIndex_50 <- createDataPartition(response_SNR_50, p = 0.8, list = FALSE)
+  trainData_50 <- predictors_SNR_50[trainIndex_50, ]
+  trainLabels_50 <- response_SNR_50[trainIndex_50]
+  testData_50 <- predictors_SNR_50[-trainIndex_50, ]
+  testLabels_50 <- response_SNR_50[-trainIndex_50]
+  
+  # Define the train control with repeated cross-validation
+  train_control <- trainControl(
+    method = "repeatedcv",
+    number = 10,              # Number of folds
+    repeats = 3              # Number of repeats
+  )
+  
+  # Train the model using the selected features
+  lasso_model_subset <- train(
+    x = trainData_50[, matching_cols],
+    y = trainLabels_50,
+    method = "glmnet",
+    trControl = train_control,
+    tuneGrid = expand.grid(alpha = 1, lambda = seq(0, 0.2, length.out = 100)), 
+    preProcess = c("center", "scale")
+  )
+  
+  # Extract the best lambda value chosen during the cross-validation
+  best_lambda <- lasso_model_subset$bestTune$lambda
+  
+  # Get the coefficients for the best model
+  coefs <- coef(lasso_model_subset$finalModel, s = best_lambda)
+  
+  # Convert coefficients to a readable format and store
+  coefficients_list[[seed]] <- as.numeric(coefs)
+  names(coefficients_list[[seed]]) <- rownames(coefs)
+  
+  # Evaluate the model on the test set
+  lasso_predictions <- predict(lasso_model_subset, newdata = testData_50[, matching_cols])
+  rmse_values[seed] <- RMSE(lasso_predictions, testLabels_50)
+  
+  # Print the coefficients for the current seed (optional)
+  print(paste("Seed:", seed))
+  print(coefficients_list[[seed]])
+}
+
+# After the loop, coefficients_list will contain the coefficients for each seed
+# You can access the coefficients for a specific seed, for example:
+
+
+print(rmse_values)
+```
+
+
+
+
+
+
+
+
+```{r}
+
+# RMSE values for the optimized SNR_50 model
+optimized_rmse <- c(0.07458760, 0.05134764, 0.05391814, 0.09290469, 0.11722380, 0.04379366, 0.11990755,
+                    0.08316363, 0.07183145, 0.12004040)
+mean(optimized_rmse)
+
+# RMSE values for the SNR_50 model
+normal_rmse <- c(0.06732128, 0.07916154, 0.14326610, 0.15656370, 0.12620370, 
+                 0.07669703, 0.10292970, 0.15412670, 0.06085778, 0.16115660)
+
+# Perform Wilcoxon signed-rank test
+wilcox_test_result <- wilcox.test(optimized_rmse, normal_rmse, paired = TRUE)
+
+# Print the test result
+print(wilcox_test_result)
+
+
+```
+
+```{r}
+# Log-transformed value
+log_transf
+
+pormed_value <- 0.08316363
+
+# Reversed transformation using exp (natural log) and then subtract 1
+original_value <- exp(log_transformed_value) - 1
+
+# Print the original value
+print(original_value)
+
+
+```
+
+
+Final model:
+```{r}
+
+# Set the seed for reproducibility to a specific value
+set.seed(8)
+
+# Create train/test partitions using the specified seed
+trainIndex_50 <- createDataPartition(response_SNR_50, p = 0.8, list = FALSE)
+trainData_50 <- predictors_SNR_50[trainIndex_50, ]
+trainLabels_50 <- response_SNR_50[trainIndex_50]
+testData_50 <- predictors_SNR_50[-trainIndex_50, ]
+testLabels_50 <- response_SNR_50[-trainIndex_50]
+
+# Define the train control with repeated cross-validation
+train_control <- trainControl(
+  method = "repeatedcv",
+  number = 10,              # Number of folds
+  repeats = 3              # Number of repeats
+)
+
+# Train the model using the selected features
+lasso_model_subset <- train(
+  x = trainData_50[, matching_cols],
+  y = trainLabels_50,
+  method = "glmnet",
+  trControl = train_control,
+  tuneGrid = expand.grid(alpha = 1, lambda = seq(0, 0.2, length.out = 100)), 
+  preProcess = c("center", "scale")
+)
+
+# Extract the best lambda value chosen during the cross-validation
+best_lambda <- lasso_model_subset$bestTune$lambda
+
+# Get the coefficients for the best model
+coefs <- coef(lasso_model_subset$finalModel, s = best_lambda)
+
+# Convert coefficients to a readable format and store
+coefficients_list <- list()  # Initialize the list to store coefficients
+coefficients_list[[5]] <- as.numeric(coefs)
+names(coefficients_list[[5]]) <- rownames(coefs)
+
+# Evaluate the model on the test set
+lasso_predictions <- predict(lasso_model_subset, newdata = testData_50[, matching_cols])
+rmse_value <- RMSE(lasso_predictions, testLabels_50)
+
+# Print the coefficients and RMSE for the specified seed
+print(paste("Seed:", 5))
+print(coefficients_list[[5]])
+print(paste("RMSE:", rmse_value))
+
+
+```
+
+
+
+
+Compare to RF
+```{r}
+
+
+# Define the tuning grid for Random Forest
+tuneGrid <- expand.grid(
+  mtry = sqrt(2000)  # Adjust as needed
+)
+
+
+
+# Loop through each seed
+for (seed in 1:10) {
+  # Set the seed for reproducibility
+  set.seed(seed)
+  
+  # Create train/test partitions using the current seed
+  trainIndex_50 <- createDataPartition(response_SNR_50, p = 0.8, list = FALSE)
+  trainData_50 <- predictors_SNR_50[trainIndex_50, ]
+  trainLabels_50 <- response_SNR_50[trainIndex_50]
+  testData_50 <- predictors_SNR_50[-trainIndex_50, ]
+  testLabels_50 <- response_SNR_50[-trainIndex_50]
+  
+  # Define the train control with repeated cross-validation
+  train_control <- trainControl(
+    method = "repeatedcv",
+    number = 10,              # Number of folds
+    repeats = 3,              # Number of repeats
+    verboseIter = TRUE
+  )
+  
+  # Train the model using the selected features
+  rf_model <- train(
+    x = trainData_50,
+    y = trainLabels_50,
+    method = "rf",
+    trControl = train_control,
+    tuneGrid = tuneGrid, 
+    preProcess = c("center", "scale")
+  )
+  
+  # Evaluate the model on the test set
+  rf_predictions <- predict(rf_model, newdata = testData_50)
+  rmse_values[seed] <- RMSE(rf_predictions, testLabels_50)
+}
+
+print(rmse_values)
+
+
+```
+```{r}
+# RMSE values for the SNR_50 model
+normal_rmse <- c(0.06732128, 0.07916154, 0.14326610, 0.15656370, 0.12620370, 
+                 0.07669703, 0.10292970, 0.15412670, 0.06085778, 0.16115660)
+
+rf_rmse <- c(0.10894422, 0.14855544, 0.10149684, 0.22732769, 0.19005442, 0.13400884, 0.20773660, 0.08524711, 0.09902070, 0.24370005)
+
+mean(rf_rmse)
+
+# Perform Wilcoxon signed-rank test
+wilcox_test_result <- wilcox.test(rf_rmse, normal_rmse, paired = TRUE)
+
+# Print the test result
+print(wilcox_test_result)
+
+```
+
+
